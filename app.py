@@ -1,5 +1,5 @@
 import flask  # import main Flask class and request object
-from flask import request, jsonify
+from flask import request, jsonify, render_template, redirect, url_for
 import requests
 import datetime
 import sqlite3
@@ -9,9 +9,11 @@ from flask_marshmallow import Marshmallow
 app = flask.Flask(__name__)  # create the Flask app
 app.config["DEBUG"] = True
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///pages.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
 ma = Marshmallow(app)
+
 
 # Model for ORM DB
 class pages(db.Model):
@@ -41,10 +43,11 @@ class pagesSchema(ma.Schema):
 page_schema = pagesSchema()
 pages_schema = pagesSchema(many=True)
 
+
 @app.route('/', methods=['GET'])
 def home():
-    return '''<h1>LANDING PAGE MANAGER</h1>
-    <p>An API for managing and testing landing pages</p>'''
+    all_data = pages.query.all()
+    return render_template("index.html",pages=all_data)
 
 
 @app.route('/api/v1/pages/all', methods=['GET'])
@@ -53,37 +56,63 @@ def api_all():
     result = pages_schema.dump(all_pages)
     return jsonify(result)
 
+
 @app.errorhandler(404)
 def page_not_found(e):
     return "<h1>404</h1><p>The resource could not be found.</p>", 404
 
 
-@app.route('/api/v1/pages/add_page', methods=['GET', 'POST'])
+@app.route('/api/v1/pages/add_page', methods=['POST'])
 def api_add_page():
     if request.method == 'POST' and not request.json:  # this block is only entered when the form is submitted
         try:
             page_name = request.form.get('page_name')
             page_url = request.form['url']
             page_traffic = request.form['traffic']
-            # Get status code and response time
-            r = requests.get(page_url, timeout=6)
-            r.raise_for_status()
-            page_status = r.status_code
-            page_signups = request.form['page_signups']
-            page_response_time = str(round(r.elapsed.total_seconds(), 2))
-            #Create a new instance of data
-            new_page = pages(page_name, page_url, page_traffic, page_status, page_signups, page_response_time)
-            db.session.add(new_page)
-            db.session.commit()
-            return page_schema.jsonify(new_page)
+            page_signups = request.form['signups']
+            # Check if the landing page exists yet
+            if pages.query.filter_by(page_name=page_name).first() is None:
+                # Get status code and response time
+                r = requests.get(page_url, timeout=6)
+                r.raise_for_status()
+                page_status = r.status_code
+                page_response_time = str(round(r.elapsed.total_seconds(), 2))
+                # Create a new instance of data
+                new_page = pages(page_name, page_url, page_traffic, page_status, page_signups, page_response_time)
+                db.session.add(new_page)
+                db.session.commit()
+                flash("Landing Page Created")
+                return page_schema.jsonify(new_page)
+            else:
+                return jsonify({'message': 'Landing page already exists'})
         except:
             conn.rollback()
-            msg = "error in insertion operation"
+
         finally:
-            return render_template("result.html",msg = msg)
+            # return render_template("index.html",msg = msg)
+            return redirect(url_for('home'))
 
     if request.json:
-        request_data = request.get_json()
+        try:
+            if pages.query.filter_by(page_name=page_name).first() is None:
+                request_data = request.get_json()
+                page_name = request_data['page_name']
+                page_url = request_data['url']
+                page_traffic = request_data['traffic']
+                r = requests.get(page_url, timeout=6)
+                r.raise_for_status()
+                page_status = r.status_code
+                page_signups = request.form['page_signups']
+                page_response_time = str(round(r.elapsed.total_seconds(), 2))
+                # Create a new instance of data
+                new_page = pages(page_name, page_url, page_traffic, page_status, page_signups, page_response_time)
+                db.session.add(new_page)
+                db.session.commit()
+                return jsonify({'message': 'Landing page entry created'})
+            else:
+                return jsonify({'message': 'Landing page already exists'})
+        except:
+            msg = "Invalid Json"
 
     return '''<form method="POST">
                     Page Name: <input type="text" name="page_name"><br>
